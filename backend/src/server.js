@@ -5,6 +5,7 @@ const cors = require("cors");
 const path = require("path");
 const authRouter = require("./routes/auth");
 const historyRouter = require("./routes/history");
+const paymentsRouter = require("./routes/payments");
 const { initDb } = require("./db");
 
 const app = express();
@@ -24,6 +25,7 @@ app.get("/api/health", (_req, res) => {
 
 app.use("/api/auth", authRouter);
 app.use("/api/history", historyRouter);
+app.use("/api/payments", paymentsRouter);
 
 app.use((err, _req, res, _next) => {
   console.error("Unhandled server error:", err);

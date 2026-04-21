@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import DenoiserView from "./components/DenoiserView";
 import Login from "./components/Login";
-import { loginRequest, registerRequest } from "./services/authApi";
+import {
+  fetchCurrentUser,
+  loginRequest,
+  registerRequest,
+} from "./services/authApi";
 
 const AUTH_EMAIL_KEY = "sd_user_email";
 const AUTH_TOKEN_KEY = "sd_auth_token";
@@ -10,19 +14,30 @@ export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
   const [userEmail, setUserEmail] = useState("");
+  const [userCredits, setUserCredits] = useState(0);
 
   useEffect(() => {
-    const savedEmail =
-      localStorage.getItem(AUTH_EMAIL_KEY) ||
-      sessionStorage.getItem(AUTH_EMAIL_KEY);
     const savedToken =
       localStorage.getItem(AUTH_TOKEN_KEY) ||
       sessionStorage.getItem(AUTH_TOKEN_KEY);
 
-    if (savedEmail && savedToken) {
-      setIsAuthenticated(true);
-      setUserEmail(savedEmail);
-    }
+    if (!savedToken) return;
+
+    const hydrateSession = async () => {
+      try {
+        const user = await fetchCurrentUser();
+        setIsAuthenticated(true);
+        setUserEmail(user.email);
+        setUserCredits(user.credits || 0);
+      } catch (_error) {
+        localStorage.removeItem(AUTH_EMAIL_KEY);
+        localStorage.removeItem(AUTH_TOKEN_KEY);
+        sessionStorage.removeItem(AUTH_EMAIL_KEY);
+        sessionStorage.removeItem(AUTH_TOKEN_KEY);
+      }
+    };
+
+    hydrateSession();
   }, []);
 
   const handleLogin = async ({ email, password, remember }) => {
@@ -33,6 +48,7 @@ export default function App() {
 
       setIsAuthenticated(true);
       setUserEmail(data.user.email);
+      setUserCredits(data.user.credits || 0);
 
       const storage = remember ? localStorage : sessionStorage;
       const alternateStorage = remember ? sessionStorage : localStorage;
@@ -52,6 +68,7 @@ export default function App() {
   const handleLogout = () => {
     setIsAuthenticated(false);
     setUserEmail("");
+    setUserCredits(0);
     localStorage.removeItem(AUTH_EMAIL_KEY);
     localStorage.removeItem(AUTH_TOKEN_KEY);
     sessionStorage.removeItem(AUTH_EMAIL_KEY);
@@ -79,5 +96,12 @@ export default function App() {
     );
   }
 
-  return <DenoiserView userEmail={userEmail} onLogout={handleLogout} />;
+  return (
+    <DenoiserView
+      userEmail={userEmail}
+      userCredits={userCredits}
+      onCreditsChange={setUserCredits}
+      onLogout={handleLogout}
+    />
+  );
 }

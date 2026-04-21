@@ -4,11 +4,14 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
 const { pool } = require("../db");
+const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
 const RESET_TOKEN_EXPIRES_MINUTES = Number(
   process.env.RESET_TOKEN_EXPIRES_MINUTES || 15,
 );
+const FREE_CREDITS_ON_REGISTER = 25;
+const CREDITS_PER_DENOISE = 5;
 
 let smtpTransporter;
 
@@ -96,8 +99,8 @@ router.post("/register", async (req, res) => {
 
     const passwordHash = await bcrypt.hash(password, 10);
     const inserted = await pool.query(
-      "INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email",
-      [normalizedEmail, passwordHash],
+      "INSERT INTO users (email, password_hash, credits) VALUES ($1, $2, $3) RETURNING id, email, credits",
+      [normalizedEmail, passwordHash, FREE_CREDITS_ON_REGISTER],
     );
 
     const user = inserted.rows[0];
@@ -126,7 +129,7 @@ router.post("/login", async (req, res) => {
 
   try {
     const result = await pool.query(
-      "SELECT id, email, password_hash FROM users WHERE email = $1",
+      "SELECT id, email, password_hash, credits FROM users WHERE email = $1",
       [normalizedEmail],
     );
 
@@ -152,6 +155,7 @@ router.post("/login", async (req, res) => {
       user: {
         id: user.id,
         email: user.email,
+        credits: user.credits,
       },
     });
   } catch (error) {
@@ -285,6 +289,67 @@ router.post("/reset-password", async (req, res) => {
     return res
       .status(500)
       .json({ message: "Server error while resetting password." });
+  }
+});
+
+router.get("/me", requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT id, email, credits FROM users WHERE id = $1",
+      [req.user.userId],
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    return res.json({ user: result.rows[0] });
+  } catch (error) {
+    console.error("Fetch profile error:", error);
+    return res
+      .status(500)
+      .json({ message: "Server error while fetching user profile." });
+  }
+});
+
+router.post("/credits/use", requireAuth, async (req, res) => {
+  try {
+    const updated = await pool.query(
+      `
+        UPDATE users
+        SET credits = credits - $1
+        WHERE id = $2 AND credits >= $1
+        RETURNING id, email, credits
+      `,
+      [CREDITS_PER_DENOISE, req.user.userId],
+    );
+
+    if (updated.rowCount === 0) {
+      const currentUser = await pool.query(
+        "SELECT credits FROM users WHERE id = $1",
+        [req.user.userId],
+      );
+
+      if (currentUser.rowCount === 0) {
+        return res.status(404).json({ message: "User not found." });
+      }
+
+      return res.status(402).json({
+        message: "Not enough credits. Please upgrade to continue.",
+        credits: currentUser.rows[0].credits,
+        requiredCredits: CREDITS_PER_DENOISE,
+      });
+    }
+
+    return res.json({
+      credits: updated.rows[0].credits,
+      consumedCredits: CREDITS_PER_DENOISE,
+    });
+  } catch (error) {
+    console.error("Consume credits error:", error);
+    return res
+      .status(500)
+      .json({ message: "Server error while consuming credits." });
   }
 });
 

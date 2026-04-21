@@ -37,6 +37,91 @@ export async function loginRequest({ email, password }) {
   }
 }
 
+export async function fetchCurrentUser() {
+  try {
+    const response = await axios.get(`${API_BASE_URL}/auth/me`, {
+      headers: createAuthHeaders(),
+    });
+    return response.data.user;
+  } catch (error) {
+    const message =
+      error?.response?.data?.message ||
+      "Unable to fetch user profile right now.";
+    throw new Error(message);
+  }
+}
+
+export async function consumeDenoiseCredits() {
+  try {
+    const response = await axios.post(
+      `${API_BASE_URL}/auth/credits/use`,
+      {},
+      {
+        headers: createAuthHeaders(),
+      },
+    );
+    return response.data;
+  } catch (error) {
+    const message =
+      error?.response?.data?.message || "Unable to consume credits right now.";
+    const customError = new Error(message);
+    customError.code = error?.response?.status;
+    customError.credits = error?.response?.data?.credits;
+    customError.requiredCredits = error?.response?.data?.requiredCredits;
+    throw customError;
+  }
+}
+
+export async function fetchCreditPackages() {
+  try {
+    const response = await axios.get(`${API_BASE_URL}/payments/packages`, {
+      headers: createAuthHeaders(),
+    });
+    return response.data.packages || [];
+  } catch (error) {
+    const message =
+      error?.response?.data?.message ||
+      "Unable to fetch credit packages right now.";
+    throw new Error(message);
+  }
+}
+
+export async function initiateKhaltiPayment({ packageId }) {
+  try {
+    const response = await axios.post(
+      `${API_BASE_URL}/payments/khalti/initiate`,
+      { packageId },
+      {
+        headers: createAuthHeaders(),
+      },
+    );
+    return response.data;
+  } catch (error) {
+    const message =
+      error?.response?.data?.message ||
+      "Unable to initiate Khalti payment right now.";
+    throw new Error(message);
+  }
+}
+
+export async function confirmKhaltiPayment({ pidx }) {
+  try {
+    const response = await axios.post(
+      `${API_BASE_URL}/payments/khalti/confirm`,
+      { pidx },
+      {
+        headers: createAuthHeaders(),
+      },
+    );
+    return response.data;
+  } catch (error) {
+    const message =
+      error?.response?.data?.message ||
+      "Unable to confirm Khalti payment right now.";
+    throw new Error(message);
+  }
+}
+
 export async function registerRequest({ email, password }) {
   try {
     const response = await axios.post(`${API_BASE_URL}/auth/register`, {

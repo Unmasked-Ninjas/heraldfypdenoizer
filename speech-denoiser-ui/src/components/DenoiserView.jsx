@@ -1,13 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import axios from "axios";
 import {
+  confirmKhaltiPayment,
+  consumeDenoiseCredits,
   createAudioHistoryEntry,
   deleteAudioHistoryEntry,
+  fetchCreditPackages,
   fetchAudioHistory,
+  initiateKhaltiPayment,
   uploadHistoryAssets,
 } from "../services/authApi";
 
-export default function DenoiserView({ userEmail, onLogout }) {
+const CREDITS_PER_DENOISE = 5;
+
+export default function DenoiserView({
+  userEmail,
+  userCredits,
+  onCreditsChange,
+  onLogout,
+}) {
   const [file, setFile] = useState(null);
   const [outputUrl, setOutputUrl] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -22,6 +33,14 @@ export default function DenoiserView({ userEmail, onLogout }) {
   const [selectedTrack, setSelectedTrack] = useState("denoised");
   const [historyDeleteTarget, setHistoryDeleteTarget] = useState(null);
   const [historyDeleteLoading, setHistoryDeleteLoading] = useState(false);
+  const [creditError, setCreditError] = useState("");
+  const [buyCreditsLoading, setBuyCreditsLoading] = useState(false);
+  const [creditPackagesLoading, setCreditPackagesLoading] = useState(false);
+  const [showCreditPackageModal, setShowCreditPackageModal] = useState(false);
+  const [creditPackages, setCreditPackages] = useState([]);
+  const [selectedPackageId, setSelectedPackageId] = useState("");
+  const [buyCreditsError, setBuyCreditsError] = useState("");
+  const [buyCreditsSuccess, setBuyCreditsSuccess] = useState("");
   const fileInputRef = useRef(null);
   const timerRef = useRef(null);
   const previewSourcesRef = useRef({});
@@ -45,6 +64,56 @@ export default function DenoiserView({ userEmail, onLogout }) {
   }, [userEmail]);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const paymentId = params.get("pidx") || params.get("idx");
+    const khaltiKeys = [
+      "pidx",
+      "idx",
+      "token",
+      "t",
+      "bank_reference",
+      "merchant_extra",
+      "transaction_id",
+      "tidx",
+      "amount",
+      "mobile",
+      "purchase_order_id",
+      "purchase_order_name",
+      "status",
+      "total_amount",
+    ];
+    const hasKhaltiParams = khaltiKeys.some((key) => params.has(key));
+    if (!paymentId && !hasKhaltiParams) return;
+
+    const verifyPayment = async () => {
+      if (!paymentId) return;
+      setBuyCreditsLoading(true);
+      setBuyCreditsError("");
+      try {
+        const result = await confirmKhaltiPayment({ pidx: paymentId });
+        if (typeof onCreditsChange === "function") {
+          onCreditsChange(result.credits || 0);
+        }
+        setBuyCreditsSuccess(result.message || "Credits added successfully.");
+      } catch (error) {
+        setBuyCreditsError(error.message || "Could not verify Khalti payment.");
+      } finally {
+        setBuyCreditsLoading(false);
+      }
+    };
+
+    verifyPayment();
+
+    khaltiKeys.forEach((key) => params.delete(key));
+
+    const cleanQuery = params.toString();
+    const nextUrl = cleanQuery
+      ? `${window.location.pathname}?${cleanQuery}`
+      : window.location.pathname;
+    window.history.replaceState({}, "", nextUrl);
+  }, [onCreditsChange]);
+
+  useEffect(() => {
     return () => {
       Object.values(previewSourcesRef.current).forEach((sources) => {
         if (sources?.originalUrl) URL.revokeObjectURL(sources.originalUrl);
@@ -59,6 +128,16 @@ export default function DenoiserView({ userEmail, onLogout }) {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [outputUrl]);
+
+  useEffect(() => {
+    if (!buyCreditsSuccess) return;
+
+    const timeoutId = setTimeout(() => {
+      setBuyCreditsSuccess("");
+    }, 4000);
+
+    return () => clearTimeout(timeoutId);
+  }, [buyCreditsSuccess]);
 
   useEffect(() => {
     if (loading) {
@@ -89,15 +168,39 @@ export default function DenoiserView({ userEmail, onLogout }) {
 
   const handleUpload = async () => {
     if (!file) return;
+    if (userCredits < CREDITS_PER_DENOISE) {
+      setCreditError("Not enough credits. Please upgrade to continue.");
+      return;
+    }
 
     const formData = new FormData();
     formData.append("file", file);
     setLoading(true);
     setOutputUrl(null);
+    setCreditError("");
     const startedAt = Date.now();
     const originalPreviewUrl = URL.createObjectURL(file);
 
     try {
+      try {
+        const creditsResult = await consumeDenoiseCredits();
+        if (typeof onCreditsChange === "function") {
+          onCreditsChange(creditsResult.credits || 0);
+        }
+      } catch (creditUseError) {
+        if (creditUseError?.code === 402) {
+          if (typeof onCreditsChange === "function") {
+            onCreditsChange(creditUseError.credits || 0);
+          }
+          setCreditError(creditUseError.message);
+        } else {
+          setCreditError(
+            creditUseError.message || "Could not consume credits.",
+          );
+        }
+        return;
+      }
+
       const response = await axios.post(
         "http://localhost:8000/denoise/",
         formData,
@@ -192,6 +295,58 @@ export default function DenoiserView({ userEmail, onLogout }) {
     e.stopPropagation();
     setFile(null);
     setOutputUrl(null);
+  };
+
+  const openCreditPackageModal = async () => {
+    setBuyCreditsSuccess("");
+    setBuyCreditsError("");
+    setCreditPackagesLoading(true);
+    try {
+      const packages = await fetchCreditPackages();
+      if (!packages.length) {
+        throw new Error("No credit package available right now.");
+      }
+
+      setCreditPackages(packages);
+      setSelectedPackageId(packages[0].id);
+      setShowCreditPackageModal(true);
+    } catch (error) {
+      setBuyCreditsError(error.message || "Could not load credit packages.");
+    } finally {
+      setCreditPackagesLoading(false);
+    }
+  };
+
+  const closeCreditPackageModal = () => {
+    if (buyCreditsLoading) return;
+    setShowCreditPackageModal(false);
+  };
+
+  const handleAddCredits = async () => {
+    if (!selectedPackageId) {
+      setBuyCreditsError("Please select a package first.");
+      return;
+    }
+
+    setBuyCreditsSuccess("");
+    setBuyCreditsError("");
+    setBuyCreditsLoading(true);
+    try {
+      const paymentSession = await initiateKhaltiPayment({
+        packageId: selectedPackageId,
+      });
+
+      if (!paymentSession?.paymentUrl) {
+        throw new Error("Khalti did not return a payment URL.");
+      }
+
+      setShowCreditPackageModal(false);
+      window.location.href = paymentSession.paymentUrl;
+    } catch (error) {
+      setBuyCreditsError(error.message || "Could not start Khalti payment.");
+    } finally {
+      setBuyCreditsLoading(false);
+    }
   };
 
   const formatSize = (bytes) => {
@@ -378,12 +533,111 @@ export default function DenoiserView({ userEmail, onLogout }) {
         .wave-bar:nth-child(8) { animation-delay: 0.1s; }
       `}</style>
 
+      <div className="fixed top-0 left-0 right-0 z-40 flex items-center justify-center gap-12 py-3 ...">
+        <span className="mono text-[20px] text-zinc-300">
+          Credits: <span className="text-emerald-400">{userCredits}</span>
+        </span>
+        <button
+          type="button"
+          onClick={openCreditPackageModal}
+          disabled={buyCreditsLoading || creditPackagesLoading}
+          className="mono text-[10px] uppercase tracking-wider border border-zinc-700 text-zinc-300 px-2 py-1 rounded-md hover:border-emerald-400 hover:text-emerald-400 transition-colors"
+        >
+          {creditPackagesLoading ? "Loading..." : "Add Credit"}
+        </button>
+      </div>
+
+      {buyCreditsError && (
+        <p className="mono text-xs text-red-400 mb-3 text-center">
+          {buyCreditsError}
+        </p>
+      )}
+
+      {buyCreditsSuccess && (
+        <p className="mono text-xs text-emerald-400 mb-3 text-center">
+          {buyCreditsSuccess}
+        </p>
+      )}
+
+      {showCreditPackageModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/70">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#0f1017] p-6">
+            <div className="flex items-center justify-between gap-4 mb-4">
+              <div>
+                <p className="mono text-[11px] text-emerald-400 uppercase tracking-[0.2em]">
+                  Buy Credits
+                </p>
+                <h3 className="text-lg font-semibold text-zinc-100 mt-1">
+                  Select a Package
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={closeCreditPackageModal}
+                className="mono text-xs text-zinc-500 hover:text-zinc-300"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {creditPackages.map((pkg) => (
+                <label
+                  key={pkg.id}
+                  className={`flex items-center justify-between rounded-xl border px-4 py-3 cursor-pointer transition-colors ${
+                    selectedPackageId === pkg.id
+                      ? "border-emerald-400 bg-emerald-400/10"
+                      : "border-zinc-700 bg-zinc-900/40 hover:border-zinc-500"
+                  }`}
+                >
+                  <div>
+                    <p className="text-sm text-zinc-200 font-semibold">
+                      {pkg.name}
+                    </p>
+                    <p className="mono text-[11px] text-zinc-400 mt-1">
+                      {pkg.credits} credits
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <p className="mono text-xs text-zinc-300">
+                      NPR{" "}
+                      {(Number(pkg.amountPaisa || 0) / 100).toLocaleString()}
+                    </p>
+                    <input
+                      type="radio"
+                      name="creditPackage"
+                      checked={selectedPackageId === pkg.id}
+                      onChange={() => setSelectedPackageId(pkg.id)}
+                      className="accent-emerald-400"
+                    />
+                  </div>
+                </label>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={handleAddCredits}
+              disabled={buyCreditsLoading || !selectedPackageId}
+              className={`mt-5 w-full py-3 rounded-xl font-bold text-sm tracking-widest uppercase transition-all duration-300 ${
+                buyCreditsLoading || !selectedPackageId
+                  ? "bg-zinc-800 text-zinc-600 cursor-not-allowed"
+                  : "bg-emerald-400 text-black hover:bg-emerald-300"
+              }`}
+            >
+              {buyCreditsLoading ? "Redirecting..." : "Continue to Khalti"}
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="mb-12 text-center">
         <div className="flex items-center justify-center gap-3 mb-3">
           <div
             className="w-2 h-2 rounded-full bg-emerald-400"
             style={{ animation: "pulse-ring 2s ease-in-out infinite" }}
           />
+
           <span className="mono text-xs text-emerald-400 tracking-[0.3em] uppercase">
             Neural Audio Enhancement
           </span>
@@ -397,9 +651,11 @@ export default function DenoiserView({ userEmail, onLogout }) {
       </div>
 
       <div className="w-full max-w-lg mb-4 flex items-center justify-between">
-        <span className="mono text-[11px] text-zinc-500 truncate pr-4">
-          Signed in as <span className="text-emerald-400">{userEmail}</span>
-        </span>
+        <div className="flex items-center gap-4 min-w-0">
+          <span className="mono text-[11px] text-zinc-500 truncate pr-2">
+            Signed in as <span className="text-emerald-400">{userEmail}</span>
+          </span>
+        </div>
         <button
           onClick={onLogout}
           className="mono text-[11px] uppercase tracking-wider text-zinc-400 hover:text-emerald-400 transition-colors"
@@ -501,11 +757,11 @@ export default function DenoiserView({ userEmail, onLogout }) {
 
         <button
           onClick={handleUpload}
-          disabled={loading || !file}
+          disabled={loading || !file || userCredits < CREDITS_PER_DENOISE}
           className={`
             mt-4 w-full py-4 rounded-xl font-bold text-sm tracking-widest uppercase transition-all duration-300
             ${
-              loading || !file
+              loading || !file || userCredits < CREDITS_PER_DENOISE
                 ? "bg-zinc-800 text-zinc-600 cursor-not-allowed"
                 : "bg-emerald-400 text-black hover:bg-emerald-300 active:scale-[0.98]"
             }
@@ -528,6 +784,10 @@ export default function DenoiserView({ userEmail, onLogout }) {
             "Enhance Audio"
           )}
         </button>
+
+        {creditError && (
+          <p className="mono text-xs text-red-400 mt-2">{creditError}</p>
+        )}
 
         {outputUrl && (
           <div className="mt-6 bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
