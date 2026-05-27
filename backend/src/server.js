@@ -13,9 +13,6 @@ const app = express();
 // Use Render's environment variable port, fallback to 5000 locally
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server is running on port ${PORT}`);
-});
 
 app.use(
   cors({
