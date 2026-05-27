@@ -3,6 +3,7 @@ import axios from "axios";
 const API_BASE_URL =
   process.env.REACT_APP_API_BASE_URL || "http://localhost:5000/api";
 const AUTH_TOKEN_KEY = "sd_auth_token";
+const ADMIN_TOKEN_KEY = "sd_admin_token";
 
 function getAuthToken() {
   return (
@@ -11,10 +12,28 @@ function getAuthToken() {
   );
 }
 
+function getAdminToken() {
+  return (
+    localStorage.getItem(ADMIN_TOKEN_KEY) ||
+    sessionStorage.getItem(ADMIN_TOKEN_KEY)
+  );
+}
+
 function createAuthHeaders() {
   const token = getAuthToken();
   if (!token) {
     throw new Error("Missing auth token. Please login again.");
+  }
+
+  return {
+    Authorization: `Bearer ${token}`,
+  };
+}
+
+function createAdminHeaders() {
+  const token = getAdminToken();
+  if (!token) {
+    throw new Error("Missing admin token. Please login again.");
   }
 
   return {
@@ -33,6 +52,20 @@ export async function loginRequest({ email, password }) {
     const message =
       error?.response?.data?.message ||
       "Unable to login. Please check backend and try again.";
+    throw new Error(message);
+  }
+}
+
+export async function adminLoginRequest({ email, password }) {
+  try {
+    const response = await axios.post(`${API_BASE_URL}/admin/login`, {
+      email,
+      password,
+    });
+    return response.data;
+  } catch (error) {
+    const message =
+      error?.response?.data?.message || "Unable to login as admin right now.";
     throw new Error(message);
   }
 }
@@ -235,6 +268,21 @@ export async function deleteAudioHistoryEntry(historyId) {
     const message =
       error?.response?.data?.message ||
       "Unable to delete audio history entry right now.";
+    throw new Error(message);
+  }
+}
+
+export async function fetchAdminUsers(limit = 200) {
+  try {
+    const response = await axios.get(`${API_BASE_URL}/admin/users`, {
+      params: { limit },
+      headers: createAdminHeaders(),
+    });
+    return response.data;
+  } catch (error) {
+    const message =
+      error?.response?.data?.message ||
+      "Unable to fetch admin user list right now.";
     throw new Error(message);
   }
 }

@@ -22,6 +22,7 @@ Optional:
 
 - `PORT` (default `5000`)
 - `CORS_ORIGIN` (default `http://localhost:3000`)
+- `ADMIN_EMAILS` (comma-separated list of admin emails)
 - `DEMO_USER_EMAIL` and `DEMO_USER_PASSWORD` (auto-create demo login on startup)
 - Forgot password SMTP settings:
   - `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`
